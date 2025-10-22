@@ -25,7 +25,10 @@ export interface Briefing {
   descargaLocal: string;
   montagem: string;
   ensaio: string;
-  dataEvento: string;
+  dataInicio: string;
+  dataFim: string;
+  dataMontagem: string;
+  dataDesmontagem: string;
   historicoComercial: string;
   expectativaCliente: string;
   pontosAtencao: string;

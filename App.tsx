@@ -3,6 +3,12 @@ import { auth, db } from './services/firebase';
 // Fix: Import firebase compat to use v8 syntax
 import firebase from 'firebase/compat/app';
 import { EventData, EventStatus, Briefing, Collaborator, Equipment, CollaboratorCategory, Debriefing, Timestamp } from './types';
+import FullCalendar from '@fullcalendar/react';
+import dayGridPlugin from '@fullcalendar/daygrid';
+import timeGridPlugin from '@fullcalendar/timegrid';
+import interactionPlugin from '@fullcalendar/interaction';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 // Icons
 const CalendarIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>;
@@ -14,22 +20,36 @@ const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-
 
 // --- Briefing Configuration ---
 const briefingSections = {
-  identificacao: {
-    title: '1.1. Identificação do Projeto',
+  identificacaoProjeto: {
+    title: '1.0. Identificação do Projeto',
     fields: [
       { name: 'eventName', label: 'Nome do Evento', required: true },
+      { name: 'osVersion', label: 'Número da OS' },
+      { name: 'dataMontagem', label: 'Data de Montagem', type: 'datetime-local' },
+      { name: 'dataDesmontagem', label: 'Data de Desmontagem', type: 'datetime-local' },
+      { name: 'dataInicio', label: 'Início do Evento', type: 'datetime-local' },
+      { name: 'dataFim', label: 'Fim do Evento', type: 'datetime-local' },
+    ]
+  },
+  direcao: {
+    title: '1.1. Direção',
+    fields: [
+      { name: 'direcaoTecnica', label: 'Direção Técnica' },
+      { name: 'direcaoArtistica', label: 'Direção Artística' },
+    ]
+  },
+  dadosGerais: {
+    title: '1.2. Dados Gerais',
+    fields: [
       { name: 'client', label: 'Cliente' },
-      { name: 'osVersion', label: 'Versão OS' },
       { name: 'location', label: 'Local e Endereço' },
       { name: 'atendimentoF2', label: 'Atendimento F2' },
       { name: 'produtorF2', label: 'Produtor F2' },
-      { name: 'direcaoTecnica', label: 'Direção Técnica' },
-      { name: 'direcaoArtistica', label: 'Direção Artística' },
       { name: 'produtorMaster', label: 'Produtor Master Cliente' },
     ]
   },
   datas: {
-    title: '1.2. Datas e Prazos',
+    title: '1.3. Datas e Prazos',
     fields: [
       { name: 'reuniaoBriefing', label: 'Reunião Briefing', type: 'date' },
       { name: 'dataVT', label: 'Data VT', type: 'date' },
@@ -37,11 +57,10 @@ const briefingSections = {
       { name: 'descargaLocal', label: 'Descarga Local', type: 'datetime-local' },
       { name: 'montagem', label: 'Montagem', type: 'datetime-local' },
       { name: 'ensaio', label: 'Ensaio', type: 'datetime-local' },
-      { name: 'dataEvento', label: 'Data Evento', type: 'datetime-local' },
     ]
   },
   escopo: {
-    title: '1.3. Escopo e Objetivos',
+    title: '1.4. Escopo e Objetivos',
     fields: [
       { name: 'historicoComercial', label: 'Histórico Comercial', as: 'textarea' },
       { name: 'expectativaCliente', label: 'Expectativa Cliente', as: 'textarea' },
@@ -52,7 +71,7 @@ const briefingSections = {
     ]
   },
   operacional: {
-    title: '1.4. Operacional',
+    title: '1.5. Operacional',
     fields: [
       { name: 'equipamentosNossos', label: 'Equipamentos Nossos', as: 'textarea' },
       { name: 'preMontagem', label: 'Pré Montagem' },
@@ -64,7 +83,7 @@ const briefingSections = {
     ]
   },
   terceiros: {
-    title: '1.5. Terceiros',
+    title: '1.6. Terceiros',
     fields: [
       { name: 'terceirosCenografia', label: 'Terceiros - Cenografia' },
       { name: 'terceirosTecnica', label: 'Terceiros - Técnica' },
@@ -73,7 +92,7 @@ const briefingSections = {
     ]
   },
   local: {
-    title: '1.6. Local',
+    title: '1.7. Local',
     fields: [
       { name: 'localSalaPavilhao', label: 'Local/Sala/Pavilhão' },
       { name: 'acessoCargaDescarga', label: 'Acesso Carga/Descarga' },
@@ -121,11 +140,11 @@ const formatMonthYear = (date: Date) => {
 
 const getStatusColor = (status: EventStatus) => {
     switch (status) {
-        case EventStatus.Aprovado: return 'bg-green-500 text-white';
-        case EventStatus.EmAndamento: return 'bg-blue-500 text-white';
-        case EventStatus.Concluido: return 'bg-gray-500 text-white';
-        case EventStatus.Orcamento: return 'bg-yellow-500 text-black';
-        default: return 'bg-gray-700';
+        case EventStatus.Aprovado: return 'bg-green-500';
+        case EventStatus.EmAndamento: return 'bg-blue-500';
+        case EventStatus.Concluido: return 'bg-gray-500';
+        case EventStatus.Orcamento: return 'bg-yellow-500';
+        default: return 'bg-gray-400';
     }
 };
 
@@ -142,15 +161,15 @@ interface FormFieldProps {
 
 const FormField: React.FC<FormFieldProps> = ({ label, name, value, onChange, type = 'text', required = false, as = 'input', options }) => (
     <div className="mb-4">
-        <label htmlFor={name} className="block text-sm font-medium text-gray-300 mb-1">{label}{required && ' *'}</label>
+        <label htmlFor={name} className="block text-sm font-medium text-gray-700 mb-1">{label}{required && ' *'}</label>
         {as === 'textarea' ? (
-            <textarea id={name} name={name} value={value} onChange={onChange} rows={3} className="w-full bg-gray-700 border border-gray-600 rounded-md p-2 focus:ring-accent focus:border-accent" />
+            <textarea id={name} name={name} value={value} onChange={onChange} rows={3} className="w-full bg-white border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500" />
         ) : as === 'select' ? (
-             <select id={name} name={name} value={value} onChange={onChange} className="w-full bg-gray-700 border border-gray-600 rounded-md p-2 focus:ring-accent focus:border-accent">
+             <select id={name} name={name} value={value} onChange={onChange} className="w-full bg-white border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500">
                 {options?.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
             </select>
         ) : (
-            <input type={type} id={name} name={name} value={value} onChange={onChange} required={required} className="w-full bg-gray-700 border border-gray-600 rounded-md p-2 focus:ring-accent focus:border-accent" />
+            <input type={type} id={name} name={name} value={value} onChange={onChange} required={required} className="w-full bg-white border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500" />
         )}
     </div>
 );
@@ -165,11 +184,11 @@ interface ModalProps {
 const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }) => {
     if (!isOpen) return null;
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-start z-50 pt-10 pb-10 overflow-y-auto">
-            <div className="bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl m-4">
-                <div className="p-6 border-b border-gray-700 flex justify-between items-center">
-                    <h3 className="text-2xl font-semibold text-white">{title}</h3>
-                    <button onClick={onClose} className="text-gray-400 hover:text-white">&times;</button>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-start z-50 pt-10 pb-10 overflow-y-auto">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl m-4">
+                <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+                    <h3 className="text-2xl font-semibold text-gray-800">{title}</h3>
+                    <button onClick={onClose} className="text-gray-500 hover:text-gray-800">&times;</button>
                 </div>
                 <div className="p-6 max-h-[80vh] overflow-y-auto">
                     {children}
@@ -215,7 +234,7 @@ export default function App() {
 
     const renderPage = () => {
         if (loading) {
-            return <div className="flex justify-center items-center h-screen"><div className="animate-spin rounded-full h-32 w-32 border-t-2 border-b-2 border-accent"></div></div>;
+            return <div className="flex justify-center items-center h-screen"><div className="animate-spin rounded-full h-32 w-32 border-t-2 border-b-2 border-blue-500"></div></div>;
         }
 
         if (!user) {
@@ -244,7 +263,7 @@ export default function App() {
     };
     
     return (
-        <div className="flex h-screen bg-gray-900">
+        <div className="flex h-screen bg-gray-100 text-gray-800">
             {user && !loading && <Sidebar onLogout={handleLogout} />}
             <main className="flex-1 p-8 overflow-y-auto">
                 {renderPage()}
@@ -266,10 +285,8 @@ function LoginPage() {
         setError('');
         try {
             if (isRegistering) {
-                // Fix: Use auth.createUserWithEmailAndPassword from v8 compat syntax
                 await auth.createUserWithEmailAndPassword(email, password);
             } else {
-                // Fix: Use auth.signInWithEmailAndPassword from v8 compat syntax
                 await auth.signInWithEmailAndPassword(email, password);
             }
             window.location.hash = '#/dashboard';
@@ -279,40 +296,40 @@ function LoginPage() {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-900 w-full">
-            <div className="bg-gray-800 p-8 rounded-lg shadow-lg w-full max-w-md">
-                <h2 className="text-2xl font-bold text-center text-white mb-6">
+        <div className="min-h-screen flex items-center justify-center bg-gray-100 w-full">
+            <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md border">
+                <h2 className="text-2xl font-bold text-center text-gray-800 mb-6">
                     {isRegistering ? 'Criar Conta' : 'Login CRM F2'}
                 </h2>
-                {error && <p className="bg-error/20 text-error p-3 rounded mb-4">{error}</p>}
+                {error && <p className="bg-red-100 text-red-700 p-3 rounded mb-4">{error}</p>}
                 <form onSubmit={handleAuth}>
                     <div className="mb-4">
-                        <label className="block text-gray-300 mb-2" htmlFor="email">Email</label>
+                        <label className="block text-gray-600 mb-2" htmlFor="email">Email</label>
                         <input
                             type="email"
                             id="email"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
-                            className="w-full p-2 rounded bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-accent"
+                            className="w-full p-2 rounded bg-gray-50 text-gray-800 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
                         />
                     </div>
                     <div className="mb-6">
-                        <label className="block text-gray-300 mb-2" htmlFor="password">Senha</label>
+                        <label className="block text-gray-600 mb-2" htmlFor="password">Senha</label>
                         <input
                             type="password"
                             id="password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            className="w-full p-2 rounded bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-accent"
+                            className="w-full p-2 rounded bg-gray-50 text-gray-800 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
                         />
                     </div>
-                    <button type="submit" className="w-full bg-accent hover:bg-blue-500 text-white font-bold py-2 px-4 rounded transition duration-300">
+                    <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-300">
                         {isRegistering ? 'Registrar' : 'Entrar'}
                     </button>
                 </form>
                 <button
                     onClick={() => setIsRegistering(!isRegistering)}
-                    className="w-full mt-4 text-center text-accent hover:underline"
+                    className="w-full mt-4 text-center text-blue-600 hover:underline"
                 >
                     {isRegistering ? 'Já tem uma conta? Faça login' : 'Não tem uma conta? Registre-se'}
                 </button>
@@ -338,16 +355,16 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
     }, []);
 
     return (
-        <aside className="w-64 bg-gray-800 p-6 flex flex-col justify-between">
+        <aside className="w-64 bg-white p-6 flex flex-col justify-between border-r border-gray-200">
             <div>
-                <h1 className="text-2xl font-bold text-white mb-10">F2 CRM</h1>
+                <h1 className="text-2xl font-bold text-gray-800 mb-10">F2 CRM</h1>
                 <nav>
                     <ul>
                         {navItems.map(item => (
                             <li key={item.name} className="mb-4">
                                 <a 
                                     href={item.hash} 
-                                    className={`flex items-center p-2 rounded-md transition-colors ${active === item.hash ? 'bg-accent text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-white'}`}
+                                    className={`flex items-center p-2 rounded-md transition-colors ${active === item.hash ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}
                                 >
                                     {item.icon}
                                     <span className="ml-4">{item.name}</span>
@@ -359,7 +376,7 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
             </div>
             <button
                 onClick={onLogout}
-                className="flex items-center p-2 w-full rounded-md text-gray-400 hover:bg-red-800 hover:text-white transition-colors"
+                className="flex items-center p-2 w-full rounded-md text-gray-600 hover:bg-red-100 hover:text-red-700 transition-colors"
             >
                 <LogoutIcon />
                 <span className="ml-4">Sair</span>
@@ -368,24 +385,35 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
     );
 }
 
-const EventCard: React.FC<{ event: EventData }> = ({ event }) => (
-    <div 
-        className="bg-gray-800 rounded-lg shadow-lg p-4 cursor-pointer hover:shadow-accent/50 hover:border-accent border-2 border-transparent transition-all"
-        onClick={() => window.location.hash = `#/event/${event.id}`}
-    >
-        <div className="flex justify-between items-start">
-            <h3 className="text-xl font-bold text-white mb-2">{event.briefing.eventName || 'Evento Sem Nome'}</h3>
-            <span className={`text-xs font-semibold px-2 py-1 rounded-full ${getStatusColor(event.status)}`}>
-                {event.status}
-            </span>
+const EventCard: React.FC<{ event: EventData }> = ({ event }) => {
+    const statusColor = getStatusColor(event.status);
+    const shortDate = (dateStr: string | undefined) => {
+        if (!dateStr) return 'N/D';
+        const date = new Date(dateStr);
+        if (isNaN(date.getTime())) return 'Inválida';
+        return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' }).format(date);
+    };
+
+    return (
+        <div 
+            className="bg-white rounded-lg shadow-md border border-gray-200 p-4 cursor-pointer hover:shadow-lg hover:border-blue-500 transition-all"
+            onClick={() => window.location.hash = `#/event/${event.id}`}
+        >
+            <div className="flex justify-between items-start mb-2">
+                <h3 className="text-lg font-bold text-gray-800 pr-2">{event.briefing.eventName || 'Evento Sem Nome'}</h3>
+                <div className="flex-shrink-0">
+                    <span className={`w-4 h-4 rounded-full inline-block ${statusColor}`}></span>
+                </div>
+            </div>
+            <div className="flex justify-between items-center text-sm text-gray-600">
+                <span>{shortDate(event.briefing.dataInicio)} - {shortDate(event.briefing.dataFim)}</span>
+                <span className="font-semibold bg-gray-200 text-gray-700 px-2 py-0.5 rounded">
+                    OS: {event.briefing.osVersion || event.id.substring(0, 6)}
+                </span>
+            </div>
         </div>
-        <p className="text-gray-400">Cliente: {event.briefing.client || 'N/A'}</p>
-        <p className="text-gray-400">Data: {formatDate(event.briefing.dataEvento)}</p>
-        <div className="mt-4 pt-4 border-t border-gray-700 text-right">
-             <p className="text-xs text-gray-500">Criado por: {event.creatorEmail}</p>
-        </div>
-    </div>
-);
+    );
+};
 
 
 function DashboardPage() {
@@ -395,10 +423,8 @@ function DashboardPage() {
     
     const fetchEvents = useCallback(async () => {
         setLoading(true);
-        // Fix: Use db.collection and orderBy from v8 compat syntax
         const eventsCollection = db.collection('events');
         const q = eventsCollection.orderBy('createdAt', 'desc');
-        // Fix: Use .get() to fetch data in v8 compat syntax
         const eventSnapshot = await q.get();
         const eventList = eventSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as EventData));
         setEvents(eventList);
@@ -429,8 +455,8 @@ function DashboardPage() {
     return (
         <div>
             <div className="flex justify-between items-center mb-8">
-                <h2 className="text-3xl font-bold">Dashboard de Eventos</h2>
-                <button onClick={handleCreateEvent} className="bg-accent hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg flex items-center transition duration-300">
+                <h2 className="text-3xl font-bold text-gray-800">Dashboard de Eventos</h2>
+                <button onClick={handleCreateEvent} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg flex items-center transition duration-300">
                     <PlusIcon /> Criar Nova OS
                 </button>
             </div>
@@ -438,14 +464,17 @@ function DashboardPage() {
             {Object.keys(groupedEvents).length > 0 ? (
                 Object.entries(groupedEvents).map(([monthYear, monthEvents]) => (
                     <div key={monthYear} className="mb-10">
-                        <h3 className="text-2xl font-semibold mb-4 border-b-2 border-gray-700 pb-2">{monthYear}</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <h3 className="text-2xl font-semibold mb-4 border-b-2 border-gray-200 pb-2 text-gray-700">{monthYear}</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                             {monthEvents.map(event => <EventCard key={event.id} event={event} />)}
                         </div>
                     </div>
                 ))
             ) : (
-                <p className="text-gray-400 text-center mt-10">Nenhum evento encontrado. Crie uma nova OS para começar!</p>
+                <div className="text-center py-16 bg-white border border-gray-200 rounded-lg">
+                    <p className="text-gray-500">Nenhum evento encontrado.</p>
+                    <p className="text-gray-400 mt-2">Crie uma nova OS para começar!</p>
+                </div>
             )}
 
             <EventFormModal 
@@ -511,7 +540,7 @@ function EventFormModal({ isOpen, onClose, onSave, eventData }: { isOpen: boolea
             <form onSubmit={handleSubmit}>
                 {Object.values(briefingSections).map((section) => (
                     <div key={section.title}>
-                         <h4 className="text-lg font-semibold mb-4 text-accent pt-4 border-t border-gray-700 first:border-t-0 first:pt-0">{section.title}</h4>
+                         <h4 className="text-lg font-semibold mb-4 text-blue-600 pt-4 border-t border-gray-200 first:border-t-0 first:pt-0">{section.title}</h4>
                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
                             {section.fields.map(field => (
                                 <FormField 
@@ -529,9 +558,9 @@ function EventFormModal({ isOpen, onClose, onSave, eventData }: { isOpen: boolea
                     </div>
                 ))}
 
-                 <div className="mt-6 pt-4 border-t border-gray-600 flex justify-end items-center gap-4">
-                    <button type="button" onClick={onClose} className="py-2 px-4 rounded bg-gray-600 hover:bg-gray-500">Cancelar</button>
-                    <button type="submit" className="py-2 px-4 rounded bg-accent hover:bg-blue-500 text-white font-bold">Salvar Evento</button>
+                 <div className="mt-6 pt-4 border-t border-gray-200 flex justify-end items-center gap-4">
+                    <button type="button" onClick={onClose} className="py-2 px-4 rounded bg-gray-200 hover:bg-gray-300 text-gray-800">Cancelar</button>
+                    <button type="submit" className="py-2 px-4 rounded bg-blue-600 hover:bg-blue-700 text-white font-bold">Salvar Evento</button>
                 </div>
             </form>
         </Modal>
@@ -543,8 +572,8 @@ const DetailItem: React.FC<{label: string; value: any; isDate?: boolean}> = ({ l
     const displayValue = isDate ? formatDate(value) : value.toString();
     return (
         <div className="py-2">
-            <p className="text-sm text-gray-400">{label}</p>
-            <p className="text-md text-gray-200">{displayValue}</p>
+            <p className="text-sm text-gray-500">{label}</p>
+            <p className="text-md text-gray-800">{displayValue}</p>
         </div>
     )
 };
@@ -553,6 +582,7 @@ function EventDetailPage({ eventId, user }: { eventId: string, user: firebase.Us
     const [event, setEvent] = useState<EventData | null>(null);
     const [loading, setLoading] = useState(true);
     const [isBriefingModalOpen, setIsBriefingModalOpen] = useState(false);
+    const [isExporting, setIsExporting] = useState(false);
 
     const fetchEvent = useCallback(async () => {
       setLoading(true);
@@ -579,43 +609,83 @@ function EventDetailPage({ eventId, user }: { eventId: string, user: firebase.Us
     };
     
     if (loading) return <div>Carregando evento...</div>;
-    if (!event) return <div>Evento não encontrado. <a href="#/dashboard">Voltar</a></div>;
+    if (!event) return <div>Evento não encontrado. <a href="#/dashboard" className="text-blue-600 hover:underline">Voltar</a></div>;
 
-    // Fix: Remove unnecessary type assertion to prevent 'map' on 'unknown' error
-    const eventStatusOptions = Object.values(EventStatus).map(s => <option key={s} value={s}>{s}</option>);
+    const eventStatusOptions = (Object.values(EventStatus) as string[]).map(status => (
+      <option key={status} value={status}>{status}</option>
+    ));
+
+    const handleExportPDF = () => {
+        const input = document.getElementById('pdf-content');
+        if (!input || !event) return;
+
+        setIsExporting(true);
+        html2canvas(input, { scale: 2 })
+            .then((canvas) => {
+                const imgData = canvas.toDataURL('image/png');
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const pdfWidth = pdf.internal.pageSize.getWidth();
+                const pdfHeight = pdf.internal.pageSize.getHeight();
+                const canvasWidth = canvas.width;
+                const canvasHeight = canvas.height;
+                const ratio = canvasWidth / canvasHeight;
+                const width = pdfWidth;
+                const height = width / ratio;
+                
+                let position = 0;
+                let heightLeft = height;
+
+                pdf.addImage(imgData, 'PNG', 0, position, width, height);
+                heightLeft -= pdfHeight;
+
+                while (heightLeft > 0) {
+                    position = heightLeft - height;
+                    pdf.addPage();
+                    pdf.addImage(imgData, 'PNG', 0, position, width, height);
+                    heightLeft -= pdfHeight;
+                }
+                
+                pdf.save(`OS-${event.briefing.osVersion || event.id}.pdf`);
+                setIsExporting(false);
+            });
+    };
 
     return (
-        <div className="space-y-8">
-            <div className="p-6 bg-gray-800 rounded-lg">
+        <div id="pdf-content">
+        <div className="space-y-6">
+            <div className="p-6 bg-white rounded-lg border border-gray-200">
                 <div className="flex justify-between items-center flex-wrap gap-4">
-                    <h2 className="text-3xl font-bold">{event.briefing.eventName}</h2>
+                    <h2 className="text-3xl font-bold text-gray-800">{event.briefing.eventName}</h2>
                     <div className="flex items-center gap-4">
-                        <span className={`text-sm font-semibold px-3 py-1.5 rounded-full ${getStatusColor(event.status)}`}>
+                        <button onClick={handleExportPDF} disabled={isExporting} className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded disabled:bg-gray-400">
+                            {isExporting ? 'Exportando...' : 'Exportar para PDF'}
+                        </button>
+                        <span className={`text-sm font-semibold px-3 py-1.5 rounded-full text-white ${getStatusColor(event.status)}`}>
                             {event.status}
                         </span>
                         <select 
                             value={event.status} 
                             onChange={(e) => handleStatusChange(e.target.value as EventStatus)}
-                            className="bg-gray-700 border border-gray-600 rounded-md p-2 focus:ring-accent focus:border-accent"
+                            className="bg-white border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500"
                         >
                             {eventStatusOptions}
                         </select>
                     </div>
                 </div>
-                <p className="text-gray-400 mt-2">Cliente: {event.briefing.client}</p>
-                <p className="text-gray-400">Data do Evento: {formatDate(event.briefing.dataEvento)}</p>
+                <p className="text-gray-600 mt-2">Cliente: {event.briefing.client}</p>
+                <p className="text-gray-600">Período do Evento: {formatDate(event.briefing.dataInicio)} - {formatDate(event.briefing.dataFim)}</p>
                 <p className="text-xs text-gray-500 mt-2">OS criada por {event.creatorEmail} em {formatTimestamp(event.createdAt)}</p>
             </div>
 
-            <div className="p-6 bg-gray-800 rounded-lg">
-                <div className="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
-                    <h3 className="text-2xl font-semibold">Briefing (Pré-evento)</h3>
-                    <button onClick={() => setIsBriefingModalOpen(true)} className="bg-accent hover:bg-blue-500 text-white font-bold py-2 px-4 rounded">Editar Briefing</button>
+            <div className="p-6 bg-white rounded-lg border border-gray-200">
+                <div className="flex justify-between items-center mb-4 border-b border-gray-200 pb-2">
+                    <h3 className="text-2xl font-semibold text-gray-800">Briefing (Pré-evento)</h3>
+                    <button onClick={() => setIsBriefingModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Editar Briefing</button>
                 </div>
                  
                 {Object.values(briefingSections).map(section => (
                     <div key={section.title}>
-                        <h4 className="text-lg font-semibold mt-4 text-accent">{section.title}</h4>
+                        <h4 className="text-lg font-semibold mt-4 text-blue-600">{section.title}</h4>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6">
                             {section.fields.map(field => (
                                 <DetailItem 
@@ -630,24 +700,26 @@ function EventDetailPage({ eventId, user }: { eventId: string, user: firebase.Us
                 ))}
             </div>
 
-            <div className="p-6 bg-gray-800 rounded-lg">
-                <h3 className="text-2xl font-semibold mb-4 border-b border-gray-700 pb-2">Debriefing (Pós-evento)</h3>
+            <div className="p-6 bg-white rounded-lg border border-gray-200">
+                <h3 className="text-2xl font-semibold mb-4 border-b border-gray-200 pb-2">Debriefing (Pós-evento)</h3>
                  {event.debriefing ? (
-                    <p>Debriefing preenchido.</p>
+                    <p className="text-gray-700">Debriefing preenchido.</p>
                 ) : (
-                    <p>Nenhum debriefing preenchido ainda.</p>
+                    <p className="text-gray-500">Nenhum debriefing preenchido ainda.</p>
                 )}
-                <button className="mt-4 bg-secondary hover:bg-blue-600 text-white font-bold py-2 px-4 rounded">
+                <button className="mt-4 bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded">
                     {event.debriefing ? 'Ver/Editar Debriefing' : 'Criar Debriefing'}
                 </button>
             </div>
 
-             <div className="p-6 bg-gray-800 rounded-lg">
-                <h3 className="text-2xl font-semibold mb-4 border-b border-gray-700 pb-2">Financeiro</h3>
-                <button className="mt-4 bg-green-600 hover:bg-green-500 text-white font-bold py-2 px-4 rounded">
-                    Gestão de Cachês e Reembolsos
-                </button>
-            </div>
+            {event.status === EventStatus.Orcamento && (
+                <div className="p-6 bg-white rounded-lg border border-gray-200">
+                    <h3 className="text-2xl font-semibold mb-4 border-b border-gray-200 pb-2">Financeiro</h3>
+                    <button className="mt-4 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
+                        Gestão de Cachês e Reembolsos
+                    </button>
+                </div>
+            )}
 
             <EventFormModal
                 isOpen={isBriefingModalOpen}
@@ -655,6 +727,7 @@ function EventDetailPage({ eventId, user }: { eventId: string, user: firebase.Us
                 onSave={fetchEvent}
                 eventData={event}
             />
+        </div>
         </div>
     );
 }
@@ -672,18 +745,18 @@ function ManagementTable<T extends {id: string}>({ title, data, columns, onAdd, 
     return (
         <div>
             <div className="flex justify-between items-center mb-6">
-                <h2 className="text-3xl font-bold">{title}</h2>
-                <button onClick={onAdd} className="bg-accent hover:bg-blue-500 text-white font-bold py-2 px-4 rounded-lg flex items-center transition duration-300">
+                <h2 className="text-3xl font-bold text-gray-800">{title}</h2>
+                <button onClick={onAdd} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg flex items-center transition duration-300">
                     <PlusIcon /> Adicionar Novo
                 </button>
             </div>
-             {error && <div className="bg-error/20 text-error p-4 rounded-lg mb-6">{error}</div>}
-            <div className="bg-gray-800 rounded-lg overflow-x-auto">
+             {error && <div className="bg-red-100 text-red-700 p-4 rounded-lg mb-6">{error}</div>}
+            <div className="bg-white rounded-lg overflow-x-auto border border-gray-200">
                 <table className="w-full text-left">
-                    <thead className="bg-gray-700">
+                    <thead className="bg-gray-50 border-b border-gray-200">
                         <tr>
-                            {columns.map(col => <th key={String(col.key)} className="p-4 font-semibold">{col.header}</th>)}
-                            <th className="p-4 font-semibold text-right">Ações</th>
+                            {columns.map(col => <th key={String(col.key)} className="p-4 font-semibold text-gray-600">{col.header}</th>)}
+                            <th className="p-4 font-semibold text-right text-gray-600">Ações</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -691,24 +764,24 @@ function ManagementTable<T extends {id: string}>({ title, data, columns, onAdd, 
                              <tr>
                                 <td colSpan={columns.length + 1} className="text-center p-8">
                                     <div className="flex justify-center items-center">
-                                        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-accent"></div>
-                                        <span className="ml-4 text-gray-300">Carregando...</span>
+                                        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
+                                        <span className="ml-4 text-gray-500">Carregando...</span>
                                     </div>
                                 </td>
                             </tr>
                         ) : data.length > 0 ? (
                             data.map(item => (
-                                <tr key={item.id} className="border-b border-gray-700 hover:bg-gray-700/50">
-                                    {columns.map(col => <td key={String(col.key)} className="p-4">{(item[col.key] as any) || 'N/A'}</td>)}
+                                <tr key={item.id} className="border-b border-gray-200 last:border-b-0 hover:bg-gray-50">
+                                    {columns.map(col => <td key={String(col.key)} className="p-4 text-gray-700">{(item[col.key] as any) || 'N/A'}</td>)}
                                     <td className="p-4 text-right">
-                                        <button onClick={() => onEdit(item)} className="text-yellow-400 hover:text-yellow-300 mr-4">Editar</button>
-                                        <button onClick={() => onDelete(item.id)} className="text-red-500 hover:text-red-400">Excluir</button>
+                                        <button onClick={() => onEdit(item)} className="text-yellow-600 hover:text-yellow-700 mr-4 font-medium">Editar</button>
+                                        <button onClick={() => onDelete(item.id)} className="text-red-600 hover:text-red-700 font-medium">Excluir</button>
                                     </td>
                                 </tr>
                             ))
                         ) : (
                             <tr>
-                                <td colSpan={columns.length + 1} className="text-center p-8 text-gray-400">
+                                <td colSpan={columns.length + 1} className="text-center p-8 text-gray-500">
                                     Nenhum item encontrado.
                                 </td>
                             </tr>
@@ -808,7 +881,7 @@ function CollaboratorFormModal({isOpen, onClose, onSave, collaborator}: {isOpen:
         onSave(formData);
     };
 
-    const categoryOptions = (Object.values(CollaboratorCategory) as string[]).map(c => ({value: c, label: c}));
+    const categoryOptions = (Object.values(CollaboratorCategory) as CollaboratorCategory[]).map(c => ({value: c, label: c}));
 
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={collaborator ? "Editar Colaborador" : "Adicionar Colaborador"}>
@@ -822,8 +895,8 @@ function CollaboratorFormModal({isOpen, onClose, onSave, collaborator}: {isOpen:
                 <FormField label="CPF" name="cpf" value={formData.cpf || ''} onChange={handleChange} />
                 <FormField label="RG" name="rg" value={formData.rg || ''} onChange={handleChange} />
                  <div className="md:col-span-2 mt-4 text-right">
-                    <button type="button" onClick={onClose} className="py-2 px-4 rounded bg-gray-600 hover:bg-gray-500 mr-4">Cancelar</button>
-                    <button type="submit" className="bg-accent hover:bg-blue-500 text-white font-bold py-2 px-4 rounded">Salvar</button>
+                    <button type="button" onClick={onClose} className="py-2 px-4 rounded bg-gray-200 hover:bg-gray-300 text-gray-800 mr-4">Cancelar</button>
+                    <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Salvar</button>
                 </div>
             </form>
         </Modal>
@@ -929,9 +1002,9 @@ function EquipmentFormModal({isOpen, onClose, onSave, equipmentItem}: {isOpen: b
                 <FormField label="Voltagem" name="voltagem" value={formData.voltagem || ''} onChange={handleChange} />
                 <FormField label="Valor Unitário" name="valorUnitario" type="number" value={formData.valorUnitario || 0} onChange={handleChange} />
                 <div className="md:col-span-2"><FormField label="URL da Foto" name="fotoUrl" value={formData.fotoUrl || ''} onChange={handleChange} /></div>
-                <div className="md:col-span-2 mt-4 text-right">
-                    <button type="button" onClick={onClose} className="py-2 px-4 rounded bg-gray-600 hover:bg-gray-500 mr-4">Cancelar</button>
-                    <button type="submit" className="bg-accent hover:bg-blue-500 text-white font-bold py-2 px-4 rounded">Salvar</button>
+                 <div className="md:col-span-2 mt-4 text-right">
+                    <button type="button" onClick={onClose} className="py-2 px-4 rounded bg-gray-200 hover:bg-gray-300 text-gray-800 mr-4">Cancelar</button>
+                    <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Salvar</button>
                 </div>
             </form>
         </Modal>
@@ -939,12 +1012,122 @@ function EquipmentFormModal({isOpen, onClose, onSave, equipmentItem}: {isOpen: b
 }
 
 function CalendarPage() {
+    const [events, setEvents] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    const getStatusColorForCalendar = (status: EventStatus) => {
+        switch (status) {
+            case EventStatus.Aprovado: return '#10B981'; // green-500
+            case EventStatus.EmAndamento: return '#3B82F6'; // blue-500
+            case EventStatus.Concluido: return '#6B7280'; // gray-500
+            case EventStatus.Orcamento: return '#F59E0B'; // yellow-500
+            default: return '#9CA3AF'; // gray-400
+        }
+    };
+
+    useEffect(() => {
+        const fetchEvents = async () => {
+            setLoading(true);
+            try {
+                const eventsCollection = db.collection('events');
+                const eventSnapshot = await eventsCollection.get();
+                const eventList: any[] = [];
+                eventSnapshot.docs.forEach(doc => {
+                    const data = doc.data() as EventData;
+                    const color = getStatusColorForCalendar(data.status);
+                    
+                    // Main event
+                    if (data.briefing.dataInicio && data.briefing.dataFim) {
+                        eventList.push({
+                            id: doc.id,
+                            title: data.briefing.eventName || 'Evento Sem Nome',
+                            start: data.briefing.dataInicio,
+                            end: data.briefing.dataFim,
+                            backgroundColor: color,
+                            borderColor: color,
+                            extendedProps: { type: 'event' }
+                        });
+                    }
+
+                    // Montage event
+                    if (data.briefing.dataMontagem) {
+                        eventList.push({
+                            id: `${doc.id}-montagem`,
+                            title: `Montagem: ${data.briefing.eventName}`,
+                            start: data.briefing.dataMontagem,
+                            display: 'list-item',
+                            backgroundColor: '#60A5FA', // blue-400
+                        });
+                    }
+                    
+                    // Demontage event
+                    if (data.briefing.dataDesmontagem) {
+                         eventList.push({
+                            id: `${doc.id}-desmontagem`,
+                            title: `Desmontagem: ${data.briefing.eventName}`,
+                            start: data.briefing.dataDesmontagem,
+                            display: 'list-item',
+                            backgroundColor: '#F87171', // red-400
+                        });
+                    }
+                });
+                setEvents(eventList);
+            } catch (error) {
+                console.error("Error fetching events for calendar:", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchEvents();
+    }, []);
+
+    const handleEventClick = (clickInfo: any) => {
+        const eventId = clickInfo.event.id.split('-')[0];
+        window.location.hash = `#/event/${eventId}`;
+    };
+
+    if (loading) {
+        return (
+            <div>
+                <h2 className="text-3xl font-bold mb-6 text-gray-800">Calendário de Eventos</h2>
+                <div className="flex justify-center items-center h-64">
+                    <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div>
-            <h2 className="text-3xl font-bold mb-6">Calendário de Eventos</h2>
-            <div className="bg-gray-800 rounded-lg p-8 text-center">
-                <p className="text-gray-400">A visualização do calendário está em desenvolvimento.</p>
-                <p className="text-gray-500 mt-2">Os eventos criados aparecerão aqui em breve.</p>
+            <h2 className="text-3xl font-bold mb-6 text-gray-800">Calendário de Eventos</h2>
+            <div className="bg-white rounded-lg p-4 border border-gray-200">
+                <FullCalendar
+                    plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+                    initialView="dayGridMonth"
+                    headerToolbar={{
+                        left: 'prev,next today',
+                        center: 'title',
+                        right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                    }}
+                    events={events}
+                    eventClick={handleEventClick}
+                    locale='pt-br'
+                    buttonText={{
+                        today: 'Hoje',
+                        month: 'Mês',
+                        week: 'Semana',
+                        day: 'Dia'
+                    }}
+                    height="auto"
+                    contentHeight="auto"
+                    aspectRatio={1.8}
+                    eventTimeFormat={{
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        meridiem: false
+                    }}
+                />
             </div>
         </div>
     );
