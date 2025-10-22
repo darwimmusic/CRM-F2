@@ -13,9 +13,11 @@
     "@fullcalendar/interaction": "^6.1.19",
     "@fullcalendar/react": "^6.1.19",
     "@fullcalendar/timegrid": "^6.1.19",
+    "@types/papaparse": "^5.3.16",
     "firebase": "^12.4.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^3.0.3",
+    "papaparse": "^5.5.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

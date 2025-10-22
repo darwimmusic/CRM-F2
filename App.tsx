@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { auth, db } from './services/firebase';
 // Fix: Import firebase compat to use v8 syntax
 import firebase from 'firebase/compat/app';
@@ -9,6 +9,7 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import Papa from 'papaparse';
 
 // Icons
 const CalendarIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>;
@@ -733,7 +734,7 @@ function EventDetailPage({ eventId, user }: { eventId: string, user: firebase.Us
 }
 
 function ManagementTable<T extends {id: string}>({ title, data, columns, onAdd, onEdit, onDelete, loading, error }: {
-    title: string;
+    title: string; // Title is now optional as it's handled outside for CollaboratorsPage
     data: T[];
     columns: { key: keyof T, header: string }[];
     onAdd: () => void;
@@ -742,21 +743,73 @@ function ManagementTable<T extends {id: string}>({ title, data, columns, onAdd, 
     loading: boolean;
     error: string | null;
 }) {
+    const topScrollRef = useRef<HTMLDivElement>(null);
+    const tableContainerRef = useRef<HTMLDivElement>(null);
+    const [tableWidth, setTableWidth] = useState(0);
+
+    useEffect(() => {
+        const tableEl = tableContainerRef.current?.querySelector('table');
+        if (tableEl) {
+            const updateWidth = () => setTableWidth(tableEl.scrollWidth);
+            updateWidth();
+            const resizeObserver = new ResizeObserver(updateWidth);
+            resizeObserver.observe(tableEl);
+            return () => resizeObserver.disconnect();
+        }
+    }, [data, columns, loading]);
+
+    useEffect(() => {
+        const topScroll = topScrollRef.current;
+        const tableContainer = tableContainerRef.current;
+        if (!topScroll || !tableContainer) return;
+
+        let isSyncing = false;
+        const syncTopToTable = () => {
+            if (!isSyncing) {
+                isSyncing = true;
+                topScroll.scrollLeft = tableContainer.scrollLeft;
+                isSyncing = false;
+            }
+        };
+        const syncTableToTop = () => {
+            if (!isSyncing) {
+                isSyncing = true;
+                tableContainer.scrollLeft = topScroll.scrollLeft;
+                isSyncing = false;
+            }
+        };
+
+        topScroll.addEventListener('scroll', syncTableToTop);
+        tableContainer.addEventListener('scroll', syncTopToTable);
+
+        return () => {
+            topScroll.removeEventListener('scroll', syncTableToTop);
+            tableContainer.removeEventListener('scroll', syncTopToTable);
+        };
+    }, []);
+
     return (
         <div>
-            <div className="flex justify-between items-center mb-6">
-                <h2 className="text-3xl font-bold text-gray-800">{title}</h2>
-                <button onClick={onAdd} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg flex items-center transition duration-300">
-                    <PlusIcon /> Adicionar Novo
-                </button>
+            {title && (
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-3xl font-bold text-gray-800">{title}</h2>
+                    <button onClick={onAdd} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg flex items-center transition duration-300">
+                        <PlusIcon /> Adicionar Novo
+                    </button>
+                </div>
+            )}
+            {error && <div className="bg-red-100 text-red-700 p-4 rounded-lg mb-6">{error}</div>}
+            
+            <div ref={topScrollRef} className="overflow-x-auto overflow-y-hidden" style={{ height: '16px' }}>
+                 <div style={{ width: `${tableWidth}px`, height: '1px' }}></div>
             </div>
-             {error && <div className="bg-red-100 text-red-700 p-4 rounded-lg mb-6">{error}</div>}
-            <div className="bg-white rounded-lg overflow-x-auto border border-gray-200">
-                <table className="w-full text-left">
-                    <thead className="bg-gray-50 border-b border-gray-200">
+
+            <div ref={tableContainerRef} className="bg-white rounded-lg overflow-x-auto border border-gray-200" style={{maxHeight: '60vh'}}>
+                <table className="w-full text-left whitespace-nowrap">
+                    <thead className="bg-gray-50 border-b border-gray-200 sticky top-0 z-10">
                         <tr>
                             {columns.map(col => <th key={String(col.key)} className="p-4 font-semibold text-gray-600">{col.header}</th>)}
-                            <th className="p-4 font-semibold text-right text-gray-600">Ações</th>
+                            <th className="p-4 font-semibold text-right text-gray-600 sticky right-0 bg-gray-50 z-10">Ações</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -773,7 +826,7 @@ function ManagementTable<T extends {id: string}>({ title, data, columns, onAdd, 
                             data.map(item => (
                                 <tr key={item.id} className="border-b border-gray-200 last:border-b-0 hover:bg-gray-50">
                                     {columns.map(col => <td key={String(col.key)} className="p-4 text-gray-700">{(item[col.key] as any) || 'N/A'}</td>)}
-                                    <td className="p-4 text-right">
+                                    <td className="p-4 text-right sticky right-0 bg-white hover:bg-gray-50">
                                         <button onClick={() => onEdit(item)} className="text-yellow-600 hover:text-yellow-700 mr-4 font-medium">Editar</button>
                                         <button onClick={() => onDelete(item.id)} className="text-red-600 hover:text-red-700 font-medium">Excluir</button>
                                     </td>
@@ -793,12 +846,95 @@ function ManagementTable<T extends {id: string}>({ title, data, columns, onAdd, 
     );
 }
 
+function CSVImporter({ onImport, isImporting }: { onImport: (data: Partial<Collaborator>[]) => Promise<void>, isImporting: boolean }) {
+    const [error, setError] = useState<string | null>(null);
+
+    const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        setError(null);
+
+        Papa.parse<any>(file, {
+            header: true,
+            skipEmptyLines: true,
+            transformHeader: header => header.trim(),
+            complete: async (results) => {
+                try {
+                    if (!Array.isArray(results.data)) {
+                        throw new Error("Parsed CSV data is not an array.");
+                    }
+                    const collaborators: Partial<Collaborator>[] = results.data.map((row: any) => ({
+                        nome: row['NOME'],
+                        apelido: row['APELIDO'],
+                        cargo: row['CARGO'],
+                        cpf: row['CPF'],
+                        rg: row['RG'],
+                        nascimento: row['NASCIMENTO'],
+                        cnpj: row['CNPJ'],
+                        email: row['EMAIL'],
+                        telefone: row['TELEFONE'],
+                        banco: row['BANCO'],
+                        codBanco: row['CÓD.'],
+                        agencia: row['AGÊNCIA'],
+                        conta: row['CONTA'],
+                        chavePix: row['CHAVE PIX'],
+                        categoria: row['CATEGORIA'] as CollaboratorCategory,
+                        tipo: row['TIPO'],
+                        cacheTecnico: row['CACHÊ TÉCNICO'] ? parseFloat(String(row['CACHÊ TÉCNICO']).replace(',', '.')) : null,
+                        cacheProgramador: row['CACHÊ PROGRAMADOR'] ? parseFloat(String(row['CACHÊ PROGRAMADOR']).replace(',', '.')) : null,
+                    }));
+                    
+                    await onImport(collaborators);
+                    alert('Importação concluída com sucesso!');
+                } catch (err) {
+                    console.error("Error processing CSV data:", err);
+                    setError('Erro ao processar os dados do CSV. Verifique o formato do arquivo e os tipos de dados.');
+                }
+            },
+            error: (err) => {
+                console.error("PapaParse error:", err);
+                setError('Erro ao ler o arquivo CSV.');
+            }
+        });
+    };
+
+    return (
+        <div className="my-6 p-4 border-2 border-dashed rounded-lg">
+            <h3 className="text-xl font-semibold mb-2 text-gray-700">Importar em Lote via CSV</h3>
+            <p className="text-sm text-gray-600 mb-4">
+                Selecione um arquivo CSV para adicionar múltiplos colaboradores de uma vez. Certifique-se que o arquivo segue a ordem e nome das colunas esperadas.
+            </p>
+            <input
+                type="file"
+                accept=".csv"
+                onChange={handleFileChange}
+                disabled={isImporting}
+                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+            />
+            {isImporting && <p className="text-blue-600 mt-2 animate-pulse">Importando, por favor aguarde...</p>}
+            {error && <p className="text-red-600 mt-2">{error}</p>}
+        </div>
+    );
+}
+
 function CollaboratorsPage() {
     const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editing, setEditing] = useState<Collaborator | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [isImporting, setIsImporting] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [cargoFilter, setCargoFilter] = useState('');
+
+    const filteredCollaborators = useMemo(() => {
+        return collaborators.filter(c => {
+            const matchesCargo = cargoFilter ? c.cargo === cargoFilter : true;
+            const matchesSearch = searchTerm ? c.nome.toLowerCase().includes(searchTerm.toLowerCase()) : true;
+            return matchesCargo && matchesSearch;
+        });
+    }, [collaborators, searchTerm, cargoFilter]);
 
     const fetchCollaborators = useCallback(async () => {
         setLoading(true);
@@ -830,6 +966,26 @@ function CollaboratorsPage() {
             setIsModalOpen(false);
         } catch(e) { console.error(e); alert("Erro ao salvar.")}
     }
+
+    const handleImport = async (importedData: Partial<Collaborator>[]) => {
+        setIsImporting(true);
+        try {
+            const batch = db.batch();
+            importedData.forEach(collab => {
+                if (collab.nome) { // Basic validation
+                    const docRef = db.collection("collaborators").doc();
+                    batch.set(docRef, collab);
+                }
+            });
+            await batch.commit();
+            fetchCollaborators(); // Refresh data
+        } catch (e) {
+            console.error("Error during batch import:", e);
+            alert("Ocorreu um erro durante a importação. Verifique o console para mais detalhes.");
+        } finally {
+            setIsImporting(false);
+        }
+    };
     
     const handleDelete = async (id: string) => {
         if(window.confirm("Tem certeza que deseja excluir este colaborador?")) {
@@ -839,18 +995,64 @@ function CollaboratorsPage() {
         }
     }
 
+    const cargoOptions = useMemo(() => {
+        const cargos = [...new Set(collaborators.map(c => c.cargo).filter(Boolean))];
+        return [
+            { value: '', label: 'Todos os Cargos' },
+            ...cargos.map(c => ({ value: c as string, label: c as string }))
+        ];
+    }, [collaborators]);
+
     return (
         <>
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-3xl font-bold text-gray-800">Gerenciar Colaboradores</h2>
+                <button onClick={() => { setEditing(null); setIsModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg flex items-center transition duration-300">
+                    <PlusIcon /> Adicionar Novo
+                </button>
+            </div>
+
+            <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-white border border-gray-200 rounded-lg">
+                <input
+                    type="text"
+                    placeholder="Pesquisar por nome..."
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    className="w-full bg-white border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <select
+                    value={cargoFilter}
+                    onChange={e => setCargoFilter(e.target.value)}
+                    className="w-full bg-white border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                    {cargoOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                </select>
+            </div>
+
             <ManagementTable<Collaborator>
-                title="Gerenciar Colaboradores"
-                data={collaborators}
+                title=""
+                data={filteredCollaborators}
                 columns={[
                     { key: 'nome', header: 'Nome' },
-                    { key: 'categoria', header: 'Categoria' },
+                    { key: 'apelido', header: 'Apelido' },
                     { key: 'cargo', header: 'Cargo' },
+                    { key: 'cpf', header: 'CPF' },
+                    { key: 'rg', header: 'RG' },
+                    { key: 'nascimento', header: 'Nascimento' },
+                    { key: 'cnpj', header: 'CNPJ' },
+                    { key: 'email', header: 'Email' },
                     { key: 'telefone', header: 'Telefone' },
+                    { key: 'banco', header: 'Banco' },
+                    { key: 'codBanco', header: 'Cód.' },
+                    { key: 'agencia', header: 'Agência' },
+                    { key: 'conta', header: 'Conta' },
+                    { key: 'chavePix', header: 'Chave PIX' },
+                    { key: 'categoria', header: 'Categoria' },
+                    { key: 'tipo', header: 'Tipo' },
+                    { key: 'cacheTecnico', header: 'Cachê Técnico' },
+                    { key: 'cacheProgramador', header: 'Cachê Programador' },
                 ]}
-                onAdd={() => { setEditing(null); setIsModalOpen(true); }}
+                onAdd={() => {}} // Moved button outside
                 onEdit={(item) => { setEditing(item); setIsModalOpen(true); }}
                 onDelete={handleDelete}
                 loading={loading}
@@ -862,6 +1064,7 @@ function CollaboratorsPage() {
                 onSave={handleSave} 
                 collaborator={editing}
             />
+            <CSVImporter onImport={handleImport} isImporting={isImporting} />
         </>
     );
 }
@@ -873,7 +1076,9 @@ function CollaboratorFormModal({isOpen, onClose, onSave, collaborator}: {isOpen:
     }, [collaborator, isOpen]);
     
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-        setFormData(prev => ({...prev, [e.target.name]: e.target.value}));
+        const { name, value, type } = e.target as HTMLInputElement;
+        const finalValue = type === 'number' ? (value === '' ? null : parseFloat(value)) : value;
+        setFormData(prev => ({...prev, [name]: finalValue}));
     }
 
     const handleSubmit = (e: React.FormEvent) => {
@@ -885,16 +1090,35 @@ function CollaboratorFormModal({isOpen, onClose, onSave, collaborator}: {isOpen:
 
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={collaborator ? "Editar Colaborador" : "Adicionar Colaborador"}>
-            <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-                <FormField label="Nome Completo" name="nome" value={formData.nome || ''} onChange={handleChange} required/>
-                <FormField as="select" label="Categoria" name="categoria" value={formData.categoria || ''} onChange={handleChange} options={categoryOptions} />
+            <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-4">
+                <div className="lg:col-span-3"><FormField label="Nome Completo" name="nome" value={formData.nome || ''} onChange={handleChange} required/></div>
                 <FormField label="Apelido" name="apelido" value={formData.apelido || ''} onChange={handleChange} />
                 <FormField label="Cargo" name="cargo" value={formData.cargo || ''} onChange={handleChange} />
-                <FormField label="Email" name="email" type="email" value={formData.email || ''} onChange={handleChange} />
-                <FormField label="Telefone" name="telefone" value={formData.telefone || ''} onChange={handleChange} />
+                <FormField as="select" label="Categoria" name="categoria" value={formData.categoria || ''} onChange={handleChange} options={categoryOptions} />
+                
+                <div className="lg:col-span-3 pt-4 mt-4 border-t"><h4 className="text-md font-semibold text-gray-600">Documentos</h4></div>
                 <FormField label="CPF" name="cpf" value={formData.cpf || ''} onChange={handleChange} />
                 <FormField label="RG" name="rg" value={formData.rg || ''} onChange={handleChange} />
-                 <div className="md:col-span-2 mt-4 text-right">
+                <FormField label="CNPJ" name="cnpj" value={formData.cnpj || ''} onChange={handleChange} />
+                <FormField label="Nascimento" name="nascimento" type="date" value={formData.nascimento || ''} onChange={handleChange} />
+
+                <div className="lg:col-span-3 pt-4 mt-4 border-t"><h4 className="text-md font-semibold text-gray-600">Contato</h4></div>
+                <FormField label="Email" name="email" type="email" value={formData.email || ''} onChange={handleChange} />
+                <FormField label="Telefone" name="telefone" value={formData.telefone || ''} onChange={handleChange} />
+
+                <div className="lg:col-span-3 pt-4 mt-4 border-t"><h4 className="text-md font-semibold text-gray-600">Dados Bancários</h4></div>
+                <FormField label="Banco" name="banco" value={formData.banco || ''} onChange={handleChange} />
+                <FormField label="Cód. Banco" name="codBanco" value={formData.codBanco || ''} onChange={handleChange} />
+                <FormField label="Agência" name="agencia" value={formData.agencia || ''} onChange={handleChange} />
+                <FormField label="Conta" name="conta" value={formData.conta || ''} onChange={handleChange} />
+                <FormField label="Chave PIX" name="chavePix" value={formData.chavePix || ''} onChange={handleChange} />
+                
+                <div className="lg:col-span-3 pt-4 mt-4 border-t"><h4 className="text-md font-semibold text-gray-600">Financeiro</h4></div>
+                <FormField label="Tipo" name="tipo" value={formData.tipo || ''} onChange={handleChange} />
+                <FormField label="Cachê Técnico" name="cacheTecnico" type="number" value={formData.cacheTecnico || ''} onChange={handleChange} />
+                <FormField label="Cachê Programador" name="cacheProgramador" type="number" value={formData.cacheProgramador || ''} onChange={handleChange} />
+
+                 <div className="lg:col-span-3 mt-6 text-right">
                     <button type="button" onClick={onClose} className="py-2 px-4 rounded bg-gray-200 hover:bg-gray-300 text-gray-800 mr-4">Cancelar</button>
                     <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Salvar</button>
                 </div>
