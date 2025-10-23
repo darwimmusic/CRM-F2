@@ -40,7 +40,6 @@ export interface Briefing {
   brindes: string;
   relatorios: string;
   recebimentoConteudos: string;
-  equipeF2Campo: string;
   logisticaEquipe: string;
   terceirosCenografia: string;
   terceirosTecnica: string;
@@ -57,6 +56,7 @@ export interface Briefing {
   documentacaoEquipe: string;
   carregadores: string;
   assignedPersonnel: { [key: string]: string };
+  equipeF2: string[];
 }
 
 export interface Debriefing {
@@ -99,6 +99,16 @@ export interface EventData {
   createdAt: Timestamp;
   creatorUid: string;
   creatorEmail: string;
+  budgetItems?: BudgetItem[];
+}
+
+export interface BudgetItem {
+  id: string;
+  name: string;
+  quantity: number;
+  days: number;
+  dailyRate: number;
+  total: number;
 }
 
 export enum CollaboratorCategory {

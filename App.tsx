@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { auth, db } from './services/firebase';
 // Fix: Import firebase compat to use v8 syntax
 import firebase from 'firebase/compat/app';
-import { EventData, EventStatus, Briefing, Collaborator, Equipment, CollaboratorCategory, Debriefing, Timestamp } from './types';
+import { EventData, EventStatus, Briefing, Collaborator, Equipment, CollaboratorCategory, Debriefing, Timestamp, BudgetItem } from './types';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -20,9 +20,17 @@ const LogoutIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 
 const PlusIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" /></svg>;
 
 // --- Briefing Configuration ---
-const briefingSections = {
+interface BriefingField {
+    name: string;
+    label: string;
+    required?: boolean;
+    type?: string;
+    as?: 'input' | 'textarea' | 'select';
+}
+
+const briefingSections: { [key: string]: { title: string; fields: BriefingField[] } } = {
   identificacaoProjeto: {
-    title: '1.0. Identificação do Projeto',
+    title: 'Identificação do Projeto',
     fields: [
       { name: 'eventName', label: 'Nome do Evento', required: true },
       { name: 'osVersion', label: 'Número da OS' },
@@ -33,25 +41,25 @@ const briefingSections = {
     ]
   },
   direcao: {
-    title: '1.1. Direção',
+    title: 'Direção',
     fields: [
       { name: 'direcaoTecnica', label: 'Direção Técnica' },
       { name: 'direcaoArtistica', label: 'Direção Artística' },
     ]
   },
   dadosGerais: {
-    title: '1.2. Dados Gerais',
+    title: 'Dados Gerais',
     fields: [
       { name: 'client', label: 'Cliente' },
       { name: 'location', label: 'Local e Endereço' },
       { name: 'atendimentoF2', label: 'Atendimento F2' },
       { name: 'produtorF2', label: 'Produtor F2' },
-      { name: 'produtorMaster', label: 'Produtor Master Cliente' },
     ]
   },
   datas: {
-    title: '1.3. Datas e Prazos',
+    title: 'Datas e Prazos',
     fields: [
+      { name: 'produtorMaster', label: 'Produtor Master Cliente' },
       { name: 'reuniaoBriefing', label: 'Reunião Briefing', type: 'date' },
       { name: 'dataVT', label: 'Data VT', type: 'date' },
       { name: 'dataEntregaTeste', label: 'Data Entrega Teste', type: 'date' },
@@ -61,7 +69,7 @@ const briefingSections = {
     ]
   },
   escopo: {
-    title: '1.4. Escopo e Objetivos',
+    title: 'Escopo e Objetivos',
     fields: [
       { name: 'historicoComercial', label: 'Histórico Comercial', as: 'textarea' },
       { name: 'expectativaCliente', label: 'Expectativa Cliente', as: 'textarea' },
@@ -72,19 +80,13 @@ const briefingSections = {
     ]
   },
   operacional: {
-    title: '1.5. Operacional',
+    title: 'Operacional',
     fields: [
-      { name: 'equipamentosNossos', label: 'Equipamentos Nossos', as: 'textarea' },
-      { name: 'preMontagem', label: 'Pré Montagem' },
-      { name: 'brindes', label: 'Brindes' },
-      { name: 'relatorios', label: 'Relatórios' },
-      { name: 'recebimentoConteudos', label: 'Recebimento Conteúdos' },
-      { name: 'equipeF2Campo', label: 'Equipe F2 em Campo', as: 'textarea' },
-      { name: 'logisticaEquipe', label: 'Logística Equipe' },
+      { name: 'equipeF2', label: 'Equipe F2' },
     ]
   },
   terceiros: {
-    title: '1.6. Terceiros',
+    title: 'Terceiros',
     fields: [
       { name: 'terceirosCenografia', label: 'Terceiros - Cenografia' },
       { name: 'terceirosTecnica', label: 'Terceiros - Técnica' },
@@ -93,7 +95,7 @@ const briefingSections = {
     ]
   },
   local: {
-    title: '1.7. Local',
+    title: 'Local',
     fields: [
       { name: 'localSalaPavilhao', label: 'Local/Sala/Pavilhão' },
       { name: 'acessoCargaDescarga', label: 'Acesso Carga/Descarga' },
@@ -199,6 +201,131 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children }) => {
     );
 };
 
+// --- Collaborator Selector Component ---
+const CollaboratorSelector: React.FC<{
+    selected: string[];
+    onChange: (selected: string[]) => void;
+}> = ({ selected, onChange }) => {
+    const [allCollaborators, setAllCollaborators] = useState<Collaborator[]>([]);
+    const [filteredCollaborators, setFilteredCollaborators] = useState<Collaborator[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [cargoFilter, setCargoFilter] = useState('');
+    const [isOpen, setIsOpen] = useState(false);
+    const wrapperRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const fetchCollaborators = async () => {
+            setIsLoading(true);
+            try {
+                const snapshot = await db.collection("collaborators").orderBy("nome").get();
+                const collabs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Collaborator));
+                setAllCollaborators(collabs);
+            } catch (error) {
+                
+            }
+            setIsLoading(false);
+        };
+        fetchCollaborators();
+    }, []);
+
+    useEffect(() => {
+        let filtered = allCollaborators;
+        if (cargoFilter) {
+            filtered = filtered.filter(c => c.cargo === cargoFilter);
+        }
+        if (searchTerm) {
+            filtered = filtered.filter(c => c.nome.toLowerCase().includes(searchTerm.toLowerCase()));
+        }
+        setFilteredCollaborators(filtered);
+    }, [searchTerm, cargoFilter, allCollaborators]);
+
+    const cargoOptions = useMemo(() => {
+        const cargos = [...new Set(allCollaborators.map(c => c.cargo).filter(Boolean))];
+        return ['', ...cargos];
+    }, [allCollaborators]);
+
+    const handleSelect = (collaboratorId: string) => {
+        const newSelected = selected.includes(collaboratorId)
+            ? selected.filter(id => id !== collaboratorId)
+            : [...selected, collaboratorId];
+        onChange(newSelected);
+    };
+    
+    const getSelectedCollaboratorNames = () => {
+        return allCollaborators
+            .filter(c => selected.includes(c.id))
+            .map(c => c.nome)
+            .join(', ');
+    };
+
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        }
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, [wrapperRef]);
+
+
+    return (
+        <div className="relative" ref={wrapperRef}>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Equipe F2</label>
+            <div 
+                onClick={() => setIsOpen(!isOpen)} 
+                className="w-full bg-white border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500 cursor-pointer min-h-[42px]"
+            >
+                {selected.length > 0 ? getSelectedCollaboratorNames() : <span className="text-gray-500">Selecione os colaboradores...</span>}
+            </div>
+
+            {isOpen && (
+                <div className="absolute z-10 w-full bg-white border border-gray-300 rounded-md mt-1 shadow-lg">
+                    <div className="p-2 border-b">
+                        <input
+                            type="text"
+                            placeholder="Pesquisar por nome..."
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                            className="w-full bg-white border border-gray-300 rounded-md p-2 mb-2"
+                        />
+                        <select
+                            value={cargoFilter}
+                            onChange={e => setCargoFilter(e.target.value)}
+                            className="w-full bg-white border border-gray-300 rounded-md p-2"
+                        >
+                            <option value="">Todos os Cargos</option>
+                            {cargoOptions.map(cargo => <option key={cargo} value={cargo}>{cargo}</option>)}
+                        </select>
+                    </div>
+                    <ul className="max-h-60 overflow-y-auto p-2">
+                        {isLoading ? (
+                            <li className="p-2 text-gray-500">Carregando...</li>
+                        ) : (
+                            filteredCollaborators.map(c => (
+                                <li key={c.id} className="p-2 hover:bg-gray-100 rounded-md cursor-pointer flex items-center" onClick={() => handleSelect(c.id)}>
+                                    <input
+                                        type="checkbox"
+                                        checked={selected.includes(c.id)}
+                                        readOnly
+                                        className="mr-3 h-4 w-4"
+                                    />
+                                    <div>
+                                        <div className="font-medium">{c.nome}</div>
+                                        <div className="text-sm text-gray-500">{c.cargo}</div>
+                                    </div>
+                                </li>
+                            ))
+                        )}
+                    </ul>
+                </div>
+            )}
+        </div>
+    );
+};
+
+
 // --- Main App Component ---
 export default function App() {
     // Fix: Use firebase.User type from compat library
@@ -299,8 +426,11 @@ function LoginPage() {
     return (
         <div className="min-h-screen flex items-center justify-center bg-gray-100 w-full">
             <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md border">
-                <h2 className="text-2xl font-bold text-center text-gray-800 mb-6">
-                    {isRegistering ? 'Criar Conta' : 'Login CRM F2'}
+                <div className="flex justify-center mb-6">
+                    <img src="https://firebasestorage.googleapis.com/v0/b/crm-f2.firebasestorage.app/o/LOGOS%2F440660162_446023151212681_5294145233333193669_n.jpg?alt=media&token=4ddab625-5d61-4058-976f-f7f187785922" alt="CRM F2 Logo" className="h-12" />
+                </div>
+                <h2 className="text-xl font-bold text-center text-gray-700 mb-6">
+                    {isRegistering ? 'Criar Nova Conta' : 'Acessar Plataforma'}
                 </h2>
                 {error && <p className="bg-red-100 text-red-700 p-3 rounded mb-4">{error}</p>}
                 <form onSubmit={handleAuth}>
@@ -358,7 +488,9 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
     return (
         <aside className="w-64 bg-white p-6 flex flex-col justify-between border-r border-gray-200">
             <div>
-                <h1 className="text-2xl font-bold text-gray-800 mb-10">F2 CRM</h1>
+                <div className="mb-10 flex justify-center">
+                    <img src="https://firebasestorage.googleapis.com/v0/b/crm-f2.firebasestorage.app/o/LOGOS%2F440660162_446023151212681_5294145233333193669_n.jpg?alt=media&token=4ddab625-5d61-4058-976f-f7f187785922" alt="CRM F2 Logo" className="h-20" />
+                </div>
                 <nav>
                     <ul>
                         {navItems.map(item => (
@@ -504,6 +636,10 @@ function EventFormModal({ isOpen, onClose, onSave, eventData }: { isOpen: boolea
         setBriefing(prev => ({ ...prev, [name]: finalValue }));
     };
 
+    const handleCollaboratorChange = (selectedIds: string[]) => {
+        setBriefing(prev => ({ ...prev, equipeF2: selectedIds }));
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!user || !briefing.eventName) {
@@ -539,22 +675,34 @@ function EventFormModal({ isOpen, onClose, onSave, eventData }: { isOpen: boolea
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={eventData?.id ? "Editar OS/Evento" : "Criar Nova OS/Evento"}>
             <form onSubmit={handleSubmit}>
-                {Object.values(briefingSections).map((section) => (
+                {(Object.values(briefingSections) as { title: string; fields: BriefingField[] }[]).map((section) => (
                     <div key={section.title}>
                          <h4 className="text-lg font-semibold mb-4 text-blue-600 pt-4 border-t border-gray-200 first:border-t-0 first:pt-0">{section.title}</h4>
                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-                            {section.fields.map(field => (
-                                <FormField 
-                                    key={field.name}
-                                    label={field.label}
-                                    name={field.name}
-                                    value={(briefing[field.name as keyof Briefing] as any) || ''}
-                                    onChange={handleChange}
-                                    type={field.type || 'text'}
-                                    as={field.as || 'input'}
-                                    required={field.required}
-                                />
-                            ))}
+                            {section.fields.map(field => {
+                                if (field.name === 'equipeF2') {
+                                    return (
+                                        <div key={field.name} className="md:col-span-2 mb-4">
+                                            <CollaboratorSelector
+                                                selected={(briefing.equipeF2 || []) as string[]}
+                                                onChange={handleCollaboratorChange}
+                                            />
+                                        </div>
+                                    );
+                                }
+                                return (
+                                    <FormField 
+                                        key={field.name}
+                                        label={field.label}
+                                        name={field.name}
+                                        value={(briefing[field.name as keyof Briefing] as any) || ''}
+                                        onChange={handleChange}
+                                        type={field.type || 'text'}
+                                        as={field.as || 'input'}
+                                        required={field.required}
+                                    />
+                                );
+                            })}
                          </div>
                     </div>
                 ))}
@@ -568,9 +716,19 @@ function EventFormModal({ isOpen, onClose, onSave, eventData }: { isOpen: boolea
     );
 }
 
-const DetailItem: React.FC<{label: string; value: any; isDate?: boolean}> = ({ label, value, isDate }) => {
+const DetailItem: React.FC<{label: string; value: any; isDate?: boolean; allCollaborators?: Collaborator[]}> = ({ label, value, isDate, allCollaborators }) => {
     if (!value) return null;
-    const displayValue = isDate ? formatDate(value) : value.toString();
+
+    let displayValue = isDate ? formatDate(value) : value.toString();
+
+    if (label === 'Equipe F2' && Array.isArray(value) && allCollaborators) {
+        displayValue = value.map(id => {
+            const collaborator = allCollaborators.find(c => c.id === id);
+            return collaborator ? `${collaborator.nome} (${collaborator.cargo})` : 'ID Desconhecido';
+        }).join(', ');
+    }
+
+
     return (
         <div className="py-2">
             <p className="text-sm text-gray-500">{label}</p>
@@ -579,15 +737,235 @@ const DetailItem: React.FC<{label: string; value: any; isDate?: boolean}> = ({ l
     )
 };
 
+// --- PDF Export Template ---
+const PDFExportTemplate: React.FC<{
+    event: EventData;
+    options: { exportType: string; sections: { budget: boolean; briefing: boolean; debriefing: boolean; } };
+    allCollaborators: Collaborator[];
+    id: string;
+}> = ({ event, options, allCollaborators, id }) => (
+    <div id={id} className="absolute -left-full w-full p-8 bg-white" style={{ width: '210mm' }}>
+        {/* Render all selected sections here in order */}
+        <h2>Template de PDF</h2>
+    </div>
+);
+
+// --- Export Options Modal ---
+const ExportOptionsModal: React.FC<{
+    isOpen: boolean;
+    onClose: () => void;
+    onExport: (options: any) => void;
+}> = ({ isOpen, onClose, onExport }) => {
+    const [exportType, setExportType] = useState('budget');
+    const [sections, setSections] = useState({
+        budget: true,
+        briefing: true,
+        debriefing: true,
+    });
+
+    const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const { name, checked } = e.target;
+        setSections(prev => ({ ...prev, [name]: checked }));
+    };
+
+    const handleExport = () => {
+        onExport({ exportType, sections });
+        onClose();
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Opções de Exportação para PDF">
+            <div className="space-y-6">
+                <div>
+                    <h4 className="font-semibold text-gray-700 mb-2">Formato da Lista de Materiais</h4>
+                    <select value={exportType} onChange={(e) => setExportType(e.target.value)} className="w-full bg-white border border-gray-300 rounded-md p-2">
+                        <option value="budget">Orçamento (com valores)</option>
+                        <option value="list">Lista de Materiais (sem valores)</option>
+                    </select>
+                </div>
+                <div>
+                    <h4 className="font-semibold text-gray-700 mb-2">Seções para Incluir</h4>
+                    <div className="space-y-2">
+                        <label className="flex items-center">
+                            <input type="checkbox" name="budget" checked={sections.budget} onChange={handleCheckboxChange} className="h-4 w-4 text-blue-600 border-gray-300 rounded" />
+                            <span className="ml-2 text-gray-800">Lista de Materiais/Orçamento</span>
+                        </label>
+                        <label className="flex items-center">
+                            <input type="checkbox" name="briefing" checked={sections.briefing} onChange={handleCheckboxChange} className="h-4 w-4 text-blue-600 border-gray-300 rounded" />
+                            <span className="ml-2 text-gray-800">Briefing</span>
+                        </label>
+                        <label className="flex items-center">
+                            <input type="checkbox" name="debriefing" checked={sections.debriefing} onChange={handleCheckboxChange} className="h-4 w-4 text-blue-600 border-gray-300 rounded" />
+                            <span className="ml-2 text-gray-800">Debriefing</span>
+                        </label>
+                    </div>
+                </div>
+                <div className="mt-6 pt-4 border-t border-gray-200 flex justify-end gap-4">
+                    <button type="button" onClick={onClose} className="py-2 px-4 rounded bg-gray-200 hover:bg-gray-300 text-gray-800">Cancelar</button>
+                    <button onClick={handleExport} className="py-2 px-4 rounded bg-blue-600 hover:bg-blue-700 text-white font-bold">Gerar PDF</button>
+                </div>
+            </div>
+        </Modal>
+    );
+};
+
+
+// --- Budget Section Component ---
+const BudgetSection: React.FC<{
+    event: EventData;
+    onUpdate: (updatedData: Partial<EventData>) => Promise<void>;
+}> = ({ event, onUpdate }) => {
+    const [items, setItems] = useState<BudgetItem[]>(event.budgetItems || []);
+    const [newItem, setNewItem] = useState({ name: '', quantity: 1, days: 1, dailyRate: 0 });
+
+    useEffect(() => {
+        setItems(event.budgetItems || []);
+    }, [event.budgetItems]);
+
+    const handleSave = async (itemsToSave: BudgetItem[]) => {
+        try {
+            await onUpdate({ budgetItems: itemsToSave });
+        } catch (error) {
+            console.error("Failed to save budget items:", error);
+            alert("Falha ao salvar o orçamento.");
+        }
+    };
+
+    const handleAddItem = () => {
+        if (!newItem.name || newItem.quantity <= 0 || newItem.days <= 0 || newItem.dailyRate < 0) {
+            alert("Por favor, preencha todos os campos do item corretamente.");
+            return;
+        }
+        const total = newItem.quantity * newItem.days * newItem.dailyRate;
+        const itemToAdd: BudgetItem = { ...newItem, id: new Date().toISOString(), total };
+        
+        const updatedItems = [...items, itemToAdd];
+        setItems(updatedItems);
+        handleSave(updatedItems);
+        setNewItem({ name: '', quantity: 1, days: 1, dailyRate: 0 }); // Reset form
+    };
+    
+    const handleDeleteItem = (itemId: string) => {
+        if (window.confirm("Tem certeza que deseja excluir este item?")) {
+            const updatedItems = items.filter(item => item.id !== itemId);
+            setItems(updatedItems);
+            handleSave(updatedItems);
+        }
+    };
+
+    const handleNewItemChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const { name, value, type } = e.target;
+        setNewItem(prev => ({
+            ...prev,
+            [name]: type === 'number' ? parseFloat(value) || 0 : value
+        }));
+    };
+
+    const totalBudget = useMemo(() => {
+        return items.reduce((sum, item) => sum + (item.total || 0), 0);
+    }, [items]);
+
+    return (
+        <div>
+            {/* Form for new item */}
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6 p-4 border rounded-lg bg-gray-50">
+                 <div className="md:col-span-2">
+                    <FormField label="Nome do Item" name="name" value={newItem.name} onChange={handleNewItemChange} />
+                </div>
+                <div>
+                    <FormField label="Qtd." name="quantity" type="number" value={newItem.quantity} onChange={handleNewItemChange} />
+                </div>
+                <div>
+                    <FormField label="Diárias" name="days" type="number" value={newItem.days} onChange={handleNewItemChange} />
+                </div>
+                <div>
+                    <FormField label="Valor Diária (R$)" name="dailyRate" type="number" value={newItem.dailyRate} onChange={handleNewItemChange} />
+                </div>
+                <div className="flex items-end mb-4">
+                    <button onClick={handleAddItem} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg w-full h-[42px]">Adicionar</button>
+                </div>
+            </div>
+
+            {/* Table of items */}
+            <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                    <thead className="bg-gray-50">
+                        <tr>
+                            <th className="p-4 font-semibold text-gray-600">Item</th>
+                            <th className="p-4 font-semibold text-gray-600">Nome</th>
+                            <th className="p-4 font-semibold text-gray-600 text-right">Qtd.</th>
+                            <th className="p-4 font-semibold text-gray-600 text-right">Diárias</th>
+                            <th className="p-4 font-semibold text-gray-600 text-right">Valor Diária</th>
+                            <th className="p-4 font-semibold text-gray-600 text-right">Valor Total</th>
+                            <th className="p-4 font-semibold text-gray-600 text-right">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {items.length > 0 ? items.map((item, index) => (
+                            <tr key={item.id} className="border-b hover:bg-gray-50">
+                                <td className="p-4">{index + 1}</td>
+                                <td className="p-4 font-medium">{item.name}</td>
+                                <td className="p-4 text-right">{item.quantity}</td>
+                                <td className="p-4 text-right">{item.days}</td>
+                                <td className="p-4 text-right">R$ {item.dailyRate.toFixed(2)}</td>
+                                <td className="p-4 text-right font-semibold">R$ {item.total.toFixed(2)}</td>
+                                <td className="p-4 text-right">
+                                    <button onClick={() => handleDeleteItem(item.id)} className="text-red-600 hover:text-red-800 font-medium">Excluir</button>
+                                </td>
+                            </tr>
+                        )) : (
+                            <tr>
+                                <td colSpan={7} className="text-center p-8 text-gray-500">Nenhum item adicionado ao orçamento.</td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+            
+            {/* Total */}
+            {items.length > 0 && (
+                <div className="mt-6 text-right pr-4">
+                    <h4 className="text-2xl font-bold text-gray-800">Total Geral: R$ {totalBudget.toFixed(2)}</h4>
+                </div>
+            )}
+        </div>
+    );
+};
+
+
 function EventDetailPage({ eventId, user }: { eventId: string, user: firebase.User }) {
     const [event, setEvent] = useState<EventData | null>(null);
     const [loading, setLoading] = useState(true);
     const [isBriefingModalOpen, setIsBriefingModalOpen] = useState(false);
+    const [isExportModalOpen, setIsExportModalOpen] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
+    const [allCollaborators, setAllCollaborators] = useState<Collaborator[]>([]);
+    const [activeTab, setActiveTab] = useState('budget');
+
+    const handleUpdateEvent = async (updatedData: Partial<EventData>) => {
+        if (event) {
+            const eventRef = db.collection('events').doc(event.id);
+            await eventRef.update(updatedData);
+            // Refresh event data locally to reflect the change
+            setEvent(prev => prev ? {...prev, ...updatedData} : null);
+        }
+    };
+
+    useEffect(() => {
+        const fetchCollaborators = async () => {
+            try {
+                const snapshot = await db.collection("collaborators").orderBy("nome").get();
+                const collabs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Collaborator));
+                setAllCollaborators(collabs);
+            } catch (error) {
+                console.error("Error fetching collaborators for detail view:", error);
+            }
+        };
+        fetchCollaborators();
+    }, []);
 
     const fetchEvent = useCallback(async () => {
       setLoading(true);
-      // Fix: Use db.collection().doc().get() from v8 compat syntax
       const eventRef = db.collection('events').doc(eventId);
       const eventSnap = await eventRef.get();
       if (eventSnap.exists) {
@@ -602,7 +980,6 @@ function EventDetailPage({ eventId, user }: { eventId: string, user: firebase.Us
 
     const handleStatusChange = async (newStatus: EventStatus) => {
         if (event) {
-            // Fix: Use db.collection().doc().update() from v8 compat syntax
             const eventRef = db.collection('events').doc(event.id);
             await eventRef.update({ status: newStatus });
             setEvent(prev => prev ? {...prev, status: newStatus} : null);
@@ -619,76 +996,88 @@ function EventDetailPage({ eventId, user }: { eventId: string, user: firebase.Us
     const handleExportPDF = () => {
         const input = document.getElementById('pdf-content');
         if (!input || !event) return;
-
         setIsExporting(true);
-        html2canvas(input, { scale: 2 })
-            .then((canvas) => {
-                const imgData = canvas.toDataURL('image/png');
-                const pdf = new jsPDF('p', 'mm', 'a4');
-                const pdfWidth = pdf.internal.pageSize.getWidth();
-                const pdfHeight = pdf.internal.pageSize.getHeight();
-                const canvasWidth = canvas.width;
-                const canvasHeight = canvas.height;
-                const ratio = canvasWidth / canvasHeight;
-                const width = pdfWidth;
-                const height = width / ratio;
-                
-                let position = 0;
-                let heightLeft = height;
-
+        html2canvas(input, { scale: 2 }).then((canvas) => {
+            const imgData = canvas.toDataURL('image/png');
+            const pdf = new jsPDF('p', 'mm', 'a4');
+            const pdfWidth = pdf.internal.pageSize.getWidth();
+            const pdfHeight = pdf.internal.pageSize.getHeight();
+            const canvasWidth = canvas.width;
+            const canvasHeight = canvas.height;
+            const ratio = canvasWidth / canvasHeight;
+            const width = pdfWidth;
+            const height = width / ratio;
+            let position = 0;
+            let heightLeft = height;
+            pdf.addImage(imgData, 'PNG', 0, position, width, height);
+            heightLeft -= pdfHeight;
+            while (heightLeft > 0) {
+                position = heightLeft - height;
+                pdf.addPage();
                 pdf.addImage(imgData, 'PNG', 0, position, width, height);
                 heightLeft -= pdfHeight;
-
-                while (heightLeft > 0) {
-                    position = heightLeft - height;
-                    pdf.addPage();
-                    pdf.addImage(imgData, 'PNG', 0, position, width, height);
-                    heightLeft -= pdfHeight;
-                }
-                
-                pdf.save(`OS-${event.briefing.osVersion || event.id}.pdf`);
-                setIsExporting(false);
-            });
+            }
+            pdf.save(`OS-${event.briefing.osVersion || event.id}.pdf`);
+            setIsExporting(false);
+        });
     };
+
+    const headerSections = [
+        briefingSections.identificacaoProjeto,
+        briefingSections.direcao,
+        briefingSections.dadosGerais
+    ];
+
+    const briefingTabSections = [
+        briefingSections.datas,
+        briefingSections.escopo,
+        briefingSections.operacional,
+        briefingSections.terceiros,
+        briefingSections.local
+    ];
+
+    const TabButton: React.FC<{tabName: string; label: string}> = ({ tabName, label }) => (
+        <button
+            onClick={() => setActiveTab(tabName)}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors
+                ${activeTab === tabName 
+                    ? 'border-b-2 border-blue-600 text-blue-600' 
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+        >
+            {label}
+        </button>
+    );
 
     return (
         <div id="pdf-content">
-        <div className="space-y-6">
-            <div className="p-6 bg-white rounded-lg border border-gray-200">
-                <div className="flex justify-between items-center flex-wrap gap-4">
-                    <h2 className="text-3xl font-bold text-gray-800">{event.briefing.eventName}</h2>
-                    <div className="flex items-center gap-4">
-                        <button onClick={handleExportPDF} disabled={isExporting} className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded disabled:bg-gray-400">
-                            {isExporting ? 'Exportando...' : 'Exportar para PDF'}
-                        </button>
-                        <span className={`text-sm font-semibold px-3 py-1.5 rounded-full text-white ${getStatusColor(event.status)}`}>
-                            {event.status}
-                        </span>
-                        <select 
-                            value={event.status} 
-                            onChange={(e) => handleStatusChange(e.target.value as EventStatus)}
-                            className="bg-white border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500"
-                        >
-                            {eventStatusOptions}
-                        </select>
+            <div className="space-y-6">
+                {/* --- HEADER CARD --- */}
+                <div className="p-6 bg-white rounded-lg border border-gray-200">
+                    <div className="flex justify-between items-start flex-wrap gap-4 mb-4">
+                        <div>
+                            <h2 className="text-3xl font-bold text-gray-800">{event.briefing.eventName}</h2>
+                             <p className="text-xs text-gray-500 mt-2">OS criada por {event.creatorEmail} em {formatTimestamp(event.createdAt)}</p>
+                        </div>
+                        <div className="flex items-center gap-4 flex-wrap">
+                            <button onClick={() => setIsExportModalOpen(true)} disabled={isExporting} className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded disabled:bg-gray-400">
+                                {isExporting ? 'Exportando...' : 'Exportar para PDF'}
+                            </button>
+                            <span className={`text-sm font-semibold px-3 py-1.5 rounded-full text-white ${getStatusColor(event.status)}`}>
+                                {event.status}
+                            </span>
+                            <select 
+                                value={event.status} 
+                                onChange={(e) => handleStatusChange(e.target.value as EventStatus)}
+                                className="bg-white border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500"
+                            >
+                                {eventStatusOptions}
+                            </select>
+                        </div>
                     </div>
-                </div>
-                <p className="text-gray-600 mt-2">Cliente: {event.briefing.client}</p>
-                <p className="text-gray-600">Período do Evento: {formatDate(event.briefing.dataInicio)} - {formatDate(event.briefing.dataFim)}</p>
-                <p className="text-xs text-gray-500 mt-2">OS criada por {event.creatorEmail} em {formatTimestamp(event.createdAt)}</p>
-            </div>
-
-            <div className="p-6 bg-white rounded-lg border border-gray-200">
-                <div className="flex justify-between items-center mb-4 border-b border-gray-200 pb-2">
-                    <h3 className="text-2xl font-semibold text-gray-800">Briefing (Pré-evento)</h3>
-                    <button onClick={() => setIsBriefingModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Editar Briefing</button>
-                </div>
-                 
-                {Object.values(briefingSections).map(section => (
-                    <div key={section.title}>
-                        <h4 className="text-lg font-semibold mt-4 text-blue-600">{section.title}</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6">
-                            {section.fields.map(field => (
+                    <div className="border-t border-gray-200 pt-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-4">
+                            {headerSections.flatMap(s => s.fields).map(field => (
                                 <DetailItem 
                                     key={field.name}
                                     label={field.label}
@@ -698,37 +1087,82 @@ function EventDetailPage({ eventId, user }: { eventId: string, user: firebase.Us
                             ))}
                         </div>
                     </div>
-                ))}
-            </div>
-
-            <div className="p-6 bg-white rounded-lg border border-gray-200">
-                <h3 className="text-2xl font-semibold mb-4 border-b border-gray-200 pb-2">Debriefing (Pós-evento)</h3>
-                 {event.debriefing ? (
-                    <p className="text-gray-700">Debriefing preenchido.</p>
-                ) : (
-                    <p className="text-gray-500">Nenhum debriefing preenchido ainda.</p>
-                )}
-                <button className="mt-4 bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded">
-                    {event.debriefing ? 'Ver/Editar Debriefing' : 'Criar Debriefing'}
-                </button>
-            </div>
-
-            {event.status === EventStatus.Orcamento && (
-                <div className="p-6 bg-white rounded-lg border border-gray-200">
-                    <h3 className="text-2xl font-semibold mb-4 border-b border-gray-200 pb-2">Financeiro</h3>
-                    <button className="mt-4 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
-                        Gestão de Cachês e Reembolsos
-                    </button>
                 </div>
-            )}
 
-            <EventFormModal
-                isOpen={isBriefingModalOpen}
-                onClose={() => setIsBriefingModalOpen(false)}
-                onSave={fetchEvent}
-                eventData={event}
-            />
-        </div>
+                {/* --- TABS --- */}
+                <div>
+                    <div className="border-b border-gray-200">
+                        <nav className="-mb-px flex space-x-6" aria-label="Tabs">
+                            <TabButton tabName="budget" label="Lista de Materiais" />
+                            <TabButton tabName="briefing" label="Briefing" />
+                            <TabButton tabName="debriefing" label="Debriefing" />
+                        </nav>
+                    </div>
+
+                    <div className="mt-6">
+                        {/* BUDGET TAB */}
+                        {activeTab === 'budget' && (
+                            <div className="p-6 bg-white rounded-lg border border-gray-200">
+                                <h3 className="text-2xl font-semibold mb-4 border-b border-gray-200 pb-2">Orçamento</h3>
+                                <BudgetSection event={event} onUpdate={handleUpdateEvent} />
+                            </div>
+                        )}
+
+                        {/* BRIEFING TAB */}
+                        {activeTab === 'briefing' && (
+                            <div className="p-6 bg-white rounded-lg border border-gray-200">
+                                <div className="flex justify-between items-center mb-4 border-b border-gray-200 pb-2">
+                                    <h3 className="text-2xl font-semibold text-gray-800">Briefing (Pré-evento)</h3>
+                                    <button onClick={() => setIsBriefingModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Editar Briefing</button>
+                                </div>
+                                {briefingTabSections.map(section => (
+                                    <div key={section.title}>
+                                        <h4 className="text-lg font-semibold mt-4 text-blue-600">{section.title}</h4>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6">
+                                            {section.fields.map(field => (
+                                                <DetailItem 
+                                                    key={field.name}
+                                                    label={field.label}
+                                                    value={event.briefing[field.name as keyof Briefing]}
+                                                    isDate={field.type === 'date' || field.type === 'datetime-local'}
+                                                    allCollaborators={field.name === 'equipeF2' ? allCollaborators : undefined}
+                                                />
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* DEBRIEFING TAB */}
+                        {activeTab === 'debriefing' && (
+                            <div className="p-6 bg-white rounded-lg border border-gray-200">
+                                <h3 className="text-2xl font-semibold mb-4 border-b border-gray-200 pb-2">Debriefing (Pós-evento)</h3>
+                                {event.debriefing ? (
+                                    <p className="text-gray-700">Debriefing preenchido.</p>
+                                ) : (
+                                    <p className="text-gray-500">Nenhum debriefing preenchido ainda.</p>
+                                )}
+                                <button className="mt-4 bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded">
+                                    {event.debriefing ? 'Ver/Editar Debriefing' : 'Criar Debriefing'}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                <EventFormModal
+                    isOpen={isBriefingModalOpen}
+                    onClose={() => setIsBriefingModalOpen(false)}
+                    onSave={fetchEvent}
+                    eventData={event}
+                />
+                <ExportOptionsModal 
+                    isOpen={isExportModalOpen}
+                    onClose={() => setIsExportModalOpen(false)}
+                    onExport={handleExportPDF}
+                />
+            </div>
         </div>
     );
 }
