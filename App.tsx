@@ -325,6 +325,92 @@ const CollaboratorSelector: React.FC<{
     );
 };
 
+// --- Equipment Selector Component ---
+const EquipmentSelector: React.FC<{
+    onSelect: (equipment: Equipment) => void;
+}> = ({ onSelect }) => {
+    const [allEquipment, setAllEquipment] = useState<Equipment[]>([]);
+    const [filteredEquipment, setFilteredEquipment] = useState<Equipment[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [isOpen, setIsOpen] = useState(false);
+    const wrapperRef = useRef<HTMLDivElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        const fetchEquipment = async () => {
+            setIsLoading(true);
+            try {
+                const snapshot = await db.collection("equipment").orderBy("nome").get();
+                const equipList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Equipment));
+                setAllEquipment(equipList);
+            } catch (error) {
+                console.error("Error fetching equipment:", error);
+            }
+            setIsLoading(false);
+        };
+        fetchEquipment();
+    }, []);
+
+    useEffect(() => {
+        let filtered = allEquipment;
+        if (searchTerm) {
+            filtered = filtered.filter(e => e.nome.toLowerCase().includes(searchTerm.toLowerCase()));
+        }
+        setFilteredEquipment(filtered);
+    }, [searchTerm, allEquipment]);
+
+    const handleSelect = (equipment: Equipment) => {
+        onSelect(equipment);
+        setSearchTerm(equipment.nome);
+        setIsOpen(false);
+    };
+
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        }
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, [wrapperRef]);
+
+    return (
+        <div className="relative" ref={wrapperRef}>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Item</label>
+            <input
+                ref={inputRef}
+                type="text"
+                placeholder="Pesquisar equipamento..."
+                value={searchTerm}
+                onChange={e => {
+                    setSearchTerm(e.target.value);
+                    if (!isOpen) setIsOpen(true);
+                }}
+                onFocus={() => setIsOpen(true)}
+                className="w-full bg-white border border-gray-300 rounded-md p-2"
+            />
+            {isOpen && (
+                <div className="absolute z-10 w-full bg-white border border-gray-300 rounded-md mt-1 shadow-lg">
+                    <ul className="max-h-60 overflow-y-auto p-2">
+                        {isLoading ? (
+                            <li className="p-2 text-gray-500">Carregando...</li>
+                        ) : (
+                            filteredEquipment.map(e => (
+                                <li key={e.id} className="p-2 hover:bg-gray-100 rounded-md cursor-pointer" onClick={() => handleSelect(e)}>
+                                    <div className="font-medium">{e.nome}</div>
+                                    <div className="text-sm text-gray-500">R$ {e.valorUnitario?.toFixed(2)}</div>
+                                </li>
+                            ))
+                        )}
+                    </ul>
+                </div>
+            )}
+        </div>
+    );
+};
+
 
 // --- Main App Component ---
 export default function App() {
@@ -332,6 +418,7 @@ export default function App() {
     const [user, setUser] = useState<firebase.User | null>(null);
     const [loading, setLoading] = useState(true);
     const [route, setRoute] = useState(window.location.hash || '#/dashboard');
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
     useEffect(() => {
         const handleHashChange = () => setRoute(window.location.hash);
@@ -392,8 +479,14 @@ export default function App() {
     
     return (
         <div className="flex h-screen bg-gray-100 text-gray-800">
-            {user && !loading && <Sidebar onLogout={handleLogout} />}
-            <main className="flex-1 p-8 overflow-y-auto">
+            {user && !loading && (
+                <Sidebar 
+                    onLogout={handleLogout} 
+                    isCollapsed={isSidebarCollapsed}
+                    onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                />
+            )}
+            <main className={`flex-1 p-8 overflow-y-auto transition-all duration-300 ${isSidebarCollapsed ? 'ml-20' : 'ml-64'}`}>
                 {renderPage()}
             </main>
         </div>
@@ -469,7 +562,10 @@ function LoginPage() {
     );
 }
 
-function Sidebar({ onLogout }: { onLogout: () => void }) {
+const ArrowLeftIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>;
+const ArrowRightIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>;
+
+function Sidebar({ onLogout, isCollapsed, onToggle }: { onLogout: () => void; isCollapsed: boolean; onToggle: () => void; }) {
     const navItems = [
         { name: 'Dashboard', icon: <HomeIcon />, hash: '#/dashboard' },
         { name: 'Calendário', icon: <CalendarIcon />, hash: '#/calendar' },
@@ -486,10 +582,13 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
     }, []);
 
     return (
-        <aside className="w-64 bg-white p-6 flex flex-col justify-between border-r border-gray-200">
+        <aside className={`fixed top-0 left-0 h-full bg-white p-4 flex flex-col justify-between border-r border-gray-200 transition-all duration-300 ${isCollapsed ? 'w-20' : 'w-64'}`}>
             <div>
-                <div className="mb-10 flex justify-center">
-                    <img src="https://firebasestorage.googleapis.com/v0/b/crm-f2.firebasestorage.app/o/LOGOS%2F440660162_446023151212681_5294145233333193669_n.jpg?alt=media&token=4ddab625-5d61-4058-976f-f7f187785922" alt="CRM F2 Logo" className="h-20" />
+                <div className={`mb-10 flex ${isCollapsed ? 'justify-center' : 'justify-between'} items-center`}>
+                    {!isCollapsed && <img src="https://firebasestorage.googleapis.com/v0/b/crm-f2.firebasestorage.app/o/LOGOS%2F440660162_446023151212681_5294145233333193669_n.jpg?alt=media&token=4ddab625-5d61-4058-976f-f7f187785922" alt="CRM F2 Logo" className="h-12 transition-opacity duration-300" />}
+                    <button onClick={onToggle} className="p-2 rounded-full hover:bg-gray-100">
+                        {isCollapsed ? <ArrowRightIcon /> : <ArrowLeftIcon />}
+                    </button>
                 </div>
                 <nav>
                     <ul>
@@ -497,10 +596,10 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
                             <li key={item.name} className="mb-4">
                                 <a 
                                     href={item.hash} 
-                                    className={`flex items-center p-2 rounded-md transition-colors ${active === item.hash ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'}`}
+                                    className={`flex items-center p-2 rounded-md transition-colors ${active === item.hash ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'} ${isCollapsed ? 'justify-center' : ''}`}
                                 >
                                     {item.icon}
-                                    <span className="ml-4">{item.name}</span>
+                                    {!isCollapsed && <span className="ml-4">{item.name}</span>}
                                 </a>
                             </li>
                         ))}
@@ -509,10 +608,10 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
             </div>
             <button
                 onClick={onLogout}
-                className="flex items-center p-2 w-full rounded-md text-gray-600 hover:bg-red-100 hover:text-red-700 transition-colors"
+                className={`flex items-center p-2 w-full rounded-md text-gray-600 hover:bg-red-100 hover:text-red-700 transition-colors ${isCollapsed ? 'justify-center' : ''}`}
             >
                 <LogoutIcon />
-                <span className="ml-4">Sair</span>
+                {!isCollapsed && <span className="ml-4">Sair</span>}
             </button>
         </aside>
     );
@@ -818,6 +917,14 @@ const BudgetSection: React.FC<{
     const [items, setItems] = useState<BudgetItem[]>(event.budgetItems || []);
     const [newItem, setNewItem] = useState({ name: '', quantity: 1, days: 1, dailyRate: 0 });
 
+    const handleEquipmentSelect = (equipment: Equipment) => {
+        setNewItem(prev => ({
+            ...prev,
+            name: equipment.nome,
+            dailyRate: equipment.valorUnitario || 0,
+        }));
+    };
+
     useEffect(() => {
         setItems(event.budgetItems || []);
     }, [event.budgetItems]);
@@ -870,7 +977,7 @@ const BudgetSection: React.FC<{
             {/* Form for new item */}
             <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6 p-4 border rounded-lg bg-gray-50">
                  <div className="md:col-span-2">
-                    <FormField label="Nome do Item" name="name" value={newItem.name} onChange={handleNewItemChange} />
+                    <EquipmentSelector onSelect={handleEquipmentSelect} />
                 </div>
                 <div>
                     <FormField label="Qtd." name="quantity" type="number" value={newItem.quantity} onChange={handleNewItemChange} />
@@ -1520,7 +1627,10 @@ function CollaboratorFormModal({isOpen, onClose, onSave, collaborator}: {isOpen:
         onSave(formData);
     };
 
-    const categoryOptions = (Object.values(CollaboratorCategory) as CollaboratorCategory[]).map(c => ({value: c, label: c}));
+    const categoryOptions = Object.keys(CollaboratorCategory).map(key => ({
+        value: CollaboratorCategory[key as keyof typeof CollaboratorCategory],
+        label: CollaboratorCategory[key as keyof typeof CollaboratorCategory]
+    }));
 
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={collaborator ? "Editar Colaborador" : "Adicionar Colaborador"}>
